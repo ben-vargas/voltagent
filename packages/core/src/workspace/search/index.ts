@@ -269,7 +269,7 @@ export class WorkspaceSearch {
     if (!this.autoIndexPromise) {
       const promise = this.indexPaths(this.autoIndexPaths, { context })
         .then((summary) => {
-          if (summary.indexed === 0 && summary.errors.length > 0) {
+          if (summary.errors.length > 0) {
             throw new Error(summary.errors.join("; "));
           }
           return undefined;

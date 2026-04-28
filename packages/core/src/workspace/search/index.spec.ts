@@ -75,6 +75,61 @@ describe("WorkspaceSearch", () => {
     }
   });
 
+  it("retries auto-index after partial file read failures", async () => {
+    const timestamp = new Date().toISOString();
+    const files: Record<string, FileData> = {
+      "/workspace/a.ts": {
+        content: ["export const stable = 'alpha';"],
+        created_at: timestamp,
+        modified_at: timestamp,
+      },
+      "/workspace/b.ts": {
+        content: ["export const recovered = 'beta';"],
+        created_at: timestamp,
+        modified_at: timestamp,
+      },
+    };
+    let failedOnce = false;
+    let bReadAttempts = 0;
+    const backend = new InMemoryFilesystemBackend(files, new Set(["/workspace/"]));
+    const filesystem = new WorkspaceFilesystem({
+      backend: () => ({
+        lsInfo: backend.lsInfo.bind(backend),
+        read: backend.read.bind(backend),
+        readRaw: async (filePath: string) => {
+          if (filePath === "/workspace/b.ts") {
+            bReadAttempts += 1;
+            if (!failedOnce) {
+              failedOnce = true;
+              throw new Error("temporary read failure");
+            }
+          }
+          return backend.readRaw(filePath);
+        },
+        grepRaw: backend.grepRaw.bind(backend),
+        globInfo: backend.globInfo.bind(backend),
+        write: backend.write.bind(backend),
+        edit: backend.edit.bind(backend),
+      }),
+    });
+    const search = new WorkspaceSearch({
+      filesystem,
+      autoIndexPaths: [{ path: "/workspace", glob: "**/*.ts" }],
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      const firstResults = await search.search("alpha", { path: "/workspace" });
+      const secondResults = await search.search("beta", { path: "/workspace" });
+
+      expect(firstResults.map((result) => result.path)).toEqual(["/workspace/a.ts"]);
+      expect(secondResults.map((result) => result.path)).toEqual(["/workspace/b.ts"]);
+      expect(bReadAttempts).toBe(2);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it("forwards operation context from toolkit to search calls", async () => {
     const indexPaths = vi.fn(async () => ({
       indexed: 0,
